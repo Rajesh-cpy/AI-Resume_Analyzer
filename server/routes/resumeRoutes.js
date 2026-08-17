@@ -5,7 +5,11 @@ import { uploadResume, analyzeResume } from "../controllers/resumeController.js"
 
 const router = express.Router();
 
-router.post("/upload", authMiddleware, upload.single("resume"), uploadResume);
-router.post("/analyze", authMiddleware, analyzeResume);
+router.post(
+  "/analyze",
+  authMiddleware,
+  upload.single("resume"),
+  analyzeResume
+);
 
 export default router;
