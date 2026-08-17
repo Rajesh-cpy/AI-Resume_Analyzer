@@ -209,10 +209,7 @@ const YourResumes = () => {
             <h2>ATS Resume Analysis Report</h2>
 
             {(() => {
-              const report =
-                analysisResult.suggestions?.analysis ??
-                analysisResult.suggestions ??
-                analysisResult;
+              const report = analysisResult.report ?? analysisResult;
 
               if (!report) {
                 return <p>Could not load report data.</p>;
