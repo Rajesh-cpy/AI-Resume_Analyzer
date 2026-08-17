@@ -42,7 +42,7 @@ const Login = () => {
 
       if (response.ok) {
         localStorage.setItem("token", data.token);
-        navigate("/");
+        navigate("/your-resumes");
       } else {
         setError(data.error || data.message || "Login failed");
       }
