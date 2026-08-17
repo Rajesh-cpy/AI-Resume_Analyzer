@@ -2,37 +2,27 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const buildPrompt = (
-  resumeText,
-  jobDescription
-) => `
-You are an ATS resume analyzer.
+const buildPrompt = (resumeText, jobDescription) => `
+You are an expert ATS resume analyzer.
 
-Return STRICT JSON only.
-Do not wrap in markdown.
-Do not include backticks.
-Do not include explanations outside the JSON.
+Analyze the resume against the job description.
 
-Use this exact schema:
+Return ONLY valid JSON.
+
+Do not use markdown.
+Do not use code fences.
+Do not add explanations outside the JSON.
+
+Return this exact JSON structure:
 
 {
-  "success": true,
-  "analysis": {
-    "resume_skills": [],
-    "job_description_skills": [],
-    "skills_in_jd_missing_from_resume": [],
-    "skills_in_resume_not_in_jd": [],
-    "ats_optimized_bullet_point_improvements": [
-      {
-        "original_summary": "",
-        "suggested_bullets": [],
-        "reasoning": ""
-      }
-    ],
-    "ats_optimization_tips": [],
-    "compatibility_score": 0,
-    "overall_assessment": ""
-  }
+  "resume_skills": ["skill1", "skill2"],
+  "job_description_skills": ["skill1", "skill2"],
+  "skills_in_jd_missing_from_resume": ["skill1", "skill2"],
+  "skills_in_resume_not_in_jd": ["skill1", "skill2"],
+  "ats_optimization_tips": ["tip1", "tip2"],
+  "compatibility_score": 0,
+  "overall_assessment": "assessment"
 }
 
 Resume:
@@ -48,17 +38,20 @@ export const analyzeWithGemini = async (
 ) => {
   const controller = new AbortController();
 
-  // Stop waiting after 30 seconds.
   const timeout = setTimeout(() => {
     controller.abort();
   }, 30000);
 
   try {
-    if (!process.env.GEMINI_API_KEY) {
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
       throw new Error(
-        "GEMINI_API_KEY is undefined"
+        "GEMINI_API_KEY is missing."
       );
     }
+
+    console.log("Gemini API key detected.");
 
     const response = await fetch(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
@@ -69,8 +62,7 @@ export const analyzeWithGemini = async (
 
         headers: {
           "Content-Type": "application/json",
-          "x-goog-api-key":
-            process.env.GEMINI_API_KEY,
+          "x-goog-api-key": apiKey,
         },
 
         body: JSON.stringify({
@@ -88,12 +80,12 @@ export const analyzeWithGemini = async (
           ],
 
           generationConfig: {
-            temperature: 0.2,
+            temperature: 0.1,
 
             responseMimeType:
               "application/json",
 
-            maxOutputTokens: 2500,
+            maxOutputTokens: 4096,
           },
         }),
       }
@@ -104,55 +96,109 @@ export const analyzeWithGemini = async (
     if (!response.ok) {
       console.error(
         "Gemini API Error:",
-        data
+        JSON.stringify(data, null, 2)
       );
 
       throw new Error(
         data?.error?.message ||
-          "Gemini API request failed."
+          `Gemini API returned ${response.status}`
       );
     }
 
     const rawText =
       data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
+    console.log(
+      "Gemini response received."
+    );
+
     if (!rawText) {
+      console.error(
+        "Gemini response:",
+        JSON.stringify(data, null, 2)
+      );
+
       throw new Error(
-        "Empty Gemini response."
+        "Gemini returned an empty response."
       );
     }
 
+    let parsed;
+
     try {
-      return JSON.parse(
+      parsed = JSON.parse(
         rawText
-          .replace(/```json/g, "")
+          .replace(/```json/gi, "")
           .replace(/```/g, "")
           .trim()
       );
-    } catch {
-      console.warn(
+    } catch (error) {
+      console.error(
         "Gemini returned invalid JSON."
       );
 
-      return {
-        success: false,
-        raw_model_output: rawText,
-      };
+      console.error(
+        "Raw response:",
+        rawText
+      );
+
+      throw new Error(
+        "Gemini returned an invalid or incomplete JSON response."
+      );
     }
 
-  } catch (err) {
-    if (err.name === "AbortError") {
+    // -----------------------------------------
+    // Validate the important fields
+    // -----------------------------------------
+
+    const requiredArrays = [
+      "resume_skills",
+      "job_description_skills",
+      "skills_in_jd_missing_from_resume",
+      "skills_in_resume_not_in_jd",
+      "ats_optimization_tips",
+    ];
+
+    for (const field of requiredArrays) {
+      if (!Array.isArray(parsed[field])) {
+        parsed[field] = [];
+      }
+    }
+
+    if (
+      typeof parsed.overall_assessment !==
+      "string"
+    ) {
+      parsed.overall_assessment =
+        "No overall assessment was generated.";
+    }
+
+    if (
+      typeof parsed.compatibility_score !==
+      "number"
+    ) {
+      parsed.compatibility_score = 0;
+    }
+
+    console.log(
+      "Gemini JSON parsed successfully."
+    );
+
+    return parsed;
+
+  } catch (error) {
+    if (error.name === "AbortError") {
       throw new Error(
-        "AI analysis timed out. Please try again."
+        "Gemini analysis timed out."
       );
     }
 
     console.error(
       "Gemini Fatal Error:",
-      err.message
+      error.message
     );
 
-    throw err;
+    throw error;
 
   } finally {
     clearTimeout(timeout);
