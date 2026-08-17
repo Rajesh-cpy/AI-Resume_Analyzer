@@ -3,34 +3,78 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const buildPrompt = (resumeText, jobDescription) => `
-You are an expert ATS resume analyzer.
+Analyze this resume against this job description.
 
-Analyze the resume against the job description.
+Extract:
+1. Skills found in the resume
+2. Skills required by the job description
+3. Skills required by the job but missing from the resume
+4. Skills in the resume that are not required by the job
+5. ATS optimization tips
+6. Overall assessment
 
-Return ONLY valid JSON.
+Keep the answers concise.
 
-Do not use markdown.
-Do not use code fences.
-Do not add explanations outside the JSON.
-
-Return this exact JSON structure:
-
-{
-  "resume_skills": ["skill1", "skill2"],
-  "job_description_skills": ["skill1", "skill2"],
-  "skills_in_jd_missing_from_resume": ["skill1", "skill2"],
-  "skills_in_resume_not_in_jd": ["skill1", "skill2"],
-  "ats_optimization_tips": ["tip1", "tip2"],
-  "compatibility_score": 0,
-  "overall_assessment": "assessment"
-}
-
-Resume:
+RESUME:
 ${resumeText}
 
-Job Description:
+JOB DESCRIPTION:
 ${jobDescription}
 `;
+
+const responseSchema = {
+  type: "object",
+
+  properties: {
+    resume_skills: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+
+    job_description_skills: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+
+    skills_in_jd_missing_from_resume: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+
+    skills_in_resume_not_in_jd: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+
+    ats_optimization_tips: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+
+    overall_assessment: {
+      type: "string",
+    },
+  },
+
+  required: [
+    "resume_skills",
+    "job_description_skills",
+    "skills_in_jd_missing_from_resume",
+    "skills_in_resume_not_in_jd",
+    "ats_optimization_tips",
+    "overall_assessment",
+  ],
+};
 
 export const analyzeWithGemini = async (
   resumeText,
@@ -85,7 +129,9 @@ export const analyzeWithGemini = async (
             responseMimeType:
               "application/json",
 
-            maxOutputTokens: 4096,
+            responseSchema,
+
+            maxOutputTokens: 2000,
           },
         }),
       }
@@ -93,10 +139,19 @@ export const analyzeWithGemini = async (
 
     const data = await response.json();
 
+    console.log(
+      "Gemini HTTP status:",
+      response.status
+    );
+
     if (!response.ok) {
       console.error(
         "Gemini API Error:",
-        JSON.stringify(data, null, 2)
+        JSON.stringify(
+          data,
+          null,
+          2
+        )
       );
 
       throw new Error(
@@ -105,17 +160,51 @@ export const analyzeWithGemini = async (
       );
     }
 
-    const rawText =
-      data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    // -----------------------------------------
+    // Check candidate
+    // -----------------------------------------
+
+    const candidate =
+      data?.candidates?.[0];
+
+    if (!candidate) {
+      console.error(
+        "No Gemini candidate:",
+        JSON.stringify(
+          data,
+          null,
+          2
+        )
+      );
+
+      throw new Error(
+        "Gemini did not return a candidate."
+      );
+    }
 
     console.log(
-      "Gemini response received."
+      "Gemini finish reason:",
+      candidate.finishReason
     );
+
+    // -----------------------------------------
+    // Check response text
+    // -----------------------------------------
+
+    const rawText =
+      candidate?.content?.parts
+        ?.map((part) => part.text || "")
+        .join("")
+        .trim();
 
     if (!rawText) {
       console.error(
-        "Gemini response:",
-        JSON.stringify(data, null, 2)
+        "Gemini returned no text:",
+        JSON.stringify(
+          data,
+          null,
+          2
+        )
       );
 
       throw new Error(
@@ -123,78 +212,99 @@ export const analyzeWithGemini = async (
       );
     }
 
+    console.log(
+      "Gemini response length:",
+      rawText.length
+    );
+
+    // -----------------------------------------
+    // Parse JSON
+    // -----------------------------------------
+
     let parsed;
 
     try {
-      parsed = JSON.parse(
-        rawText
-          .replace(/```json/gi, "")
-          .replace(/```/g, "")
-          .trim()
-      );
+      parsed = JSON.parse(rawText);
     } catch (error) {
       console.error(
-        "Gemini returned invalid JSON."
+        "JSON parsing failed."
       );
 
       console.error(
-        "Raw response:",
+        "Gemini raw response:",
         rawText
+      );
+
+      console.error(
+        "Finish reason:",
+        candidate.finishReason
       );
 
       throw new Error(
-        "Gemini returned an invalid or incomplete JSON response."
+        "Gemini returned invalid JSON."
       );
     }
 
     // -----------------------------------------
-    // Validate the important fields
+    // Normalize
     // -----------------------------------------
 
-    const requiredArrays = [
-      "resume_skills",
-      "job_description_skills",
-      "skills_in_jd_missing_from_resume",
-      "skills_in_resume_not_in_jd",
-      "ats_optimization_tips",
-    ];
+    parsed.resume_skills =
+      Array.isArray(
+        parsed.resume_skills
+      )
+        ? parsed.resume_skills
+        : [];
 
-    for (const field of requiredArrays) {
-      if (!Array.isArray(parsed[field])) {
-        parsed[field] = [];
-      }
-    }
+    parsed.job_description_skills =
+      Array.isArray(
+        parsed.job_description_skills
+      )
+        ? parsed.job_description_skills
+        : [];
 
-    if (
-      typeof parsed.overall_assessment !==
-      "string"
-    ) {
-      parsed.overall_assessment =
-        "No overall assessment was generated.";
-    }
+    parsed.skills_in_jd_missing_from_resume =
+      Array.isArray(
+        parsed.skills_in_jd_missing_from_resume
+      )
+        ? parsed.skills_in_jd_missing_from_resume
+        : [];
 
-    if (
-      typeof parsed.compatibility_score !==
-      "number"
-    ) {
-      parsed.compatibility_score = 0;
-    }
+    parsed.skills_in_resume_not_in_jd =
+      Array.isArray(
+        parsed.skills_in_resume_not_in_jd
+      )
+        ? parsed.skills_in_resume_not_in_jd
+        : [];
+
+    parsed.ats_optimization_tips =
+      Array.isArray(
+        parsed.ats_optimization_tips
+      )
+        ? parsed.ats_optimization_tips
+        : [];
+
+    parsed.overall_assessment =
+      parsed.overall_assessment || "";
 
     console.log(
-      "Gemini JSON parsed successfully."
+      "Gemini analysis successful."
     );
 
     return parsed;
 
   } catch (error) {
-    if (error.name === "AbortError") {
+    if (
+      error.name ===
+      "AbortError"
+    ) {
       throw new Error(
         "Gemini analysis timed out."
       );
     }
 
     console.error(
-      "Gemini Fatal Error:",
+      "Gemini error:",
       error.message
     );
 
