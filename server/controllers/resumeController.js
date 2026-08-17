@@ -9,6 +9,7 @@ export const analyzeResume = async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({
+        success: false,
         error: "Please upload a PDF resume.",
       });
     }
@@ -17,91 +18,124 @@ export const analyzeResume = async (req, res) => {
 
     if (!jobDescription?.trim()) {
       return res.status(400).json({
+        success: false,
         error: "Please provide a job description.",
       });
     }
 
-    console.log("Resume analysis started");
+    console.log("Resume analysis started.");
 
-    // --------------------------------------------------
-    // STEP 1: Parse PDF
-    // --------------------------------------------------
+    // -----------------------------
+    // PDF
+    // -----------------------------
 
     const parseStart = Date.now();
 
-    const text = await parseResume(req.file.buffer);
-
-    console.log(
-      `PDF parsing completed in ${Date.now() - parseStart}ms`
+    const text = await parseResume(
+      req.file.buffer
     );
 
-    if (!text || text.trim().length === 0) {
+    console.log(
+      `PDF parsing: ${
+        Date.now() - parseStart
+      }ms`
+    );
+
+    if (!text?.trim()) {
       return res.status(400).json({
+        success: false,
         error:
-          "No text could be extracted from this PDF. Please upload a text-based PDF.",
+          "No text could be extracted from this PDF.",
       });
     }
 
-    // Avoid sending unnecessarily huge documents to the AI.
-    const resumeText = text.trim().slice(0, 30000);
+    const resumeText = text
+      .trim()
+      .slice(0, 30000);
 
-    // --------------------------------------------------
-    // STEP 2: Keyword extraction + ATS score
-    // --------------------------------------------------
+    // -----------------------------
+    // ATS
+    // -----------------------------
 
-    const atsStart = Date.now();
+    const jdKeywords =
+      extractKeywords(jobDescription);
 
-    const jdKeywords = extractKeywords(jobDescription);
-    const resumeKeywords = extractKeywords(resumeText);
+    const resumeKeywords =
+      extractKeywords(resumeText);
 
-    const score = calculateATSScore(
-      jdKeywords,
-      resumeKeywords
-    );
+    const score =
+      calculateATSScore(
+        jdKeywords,
+        resumeKeywords
+      );
 
     console.log(
-      `ATS calculation completed in ${Date.now() - atsStart}ms`
+      "Local ATS score:",
+      score
     );
 
-    // --------------------------------------------------
-    // STEP 3: Gemini analysis
-    // --------------------------------------------------
+    // -----------------------------
+    // GEMINI
+    // -----------------------------
 
     const aiStart = Date.now();
 
-    const suggestions = await analyzeWithGemini(
-      resumeText,
-      jobDescription.trim()
+    const aiReport =
+      await analyzeWithGemini(
+        resumeText,
+        jobDescription.trim()
+      );
+
+    console.log(
+      `Gemini analysis: ${
+        Date.now() - aiStart
+      }ms`
+    );
+
+    // -----------------------------
+    // FINAL RESPONSE
+    // -----------------------------
+
+    const finalReport = {
+      ...aiReport,
+
+      // Always trust the local ATS calculation
+      // for the displayed compatibility score.
+      compatibility_score: score,
+    };
+
+    console.log(
+      "Final report:",
+      JSON.stringify(
+        finalReport,
+        null,
+        2
+      )
     );
 
     console.log(
-      `Gemini analysis completed in ${Date.now() - aiStart}ms`
-    );
-
-    // --------------------------------------------------
-    // Final response
-    // --------------------------------------------------
-
-    console.log(
-      `TOTAL analysis time: ${Date.now() - startTime}ms`
+      `TOTAL: ${
+        Date.now() - startTime
+      }ms`
     );
 
     return res.json({
       success: true,
       score,
-      suggestions,
+      report: finalReport,
     });
 
-  } catch (err) {
+  } catch (error) {
     console.error(
       "Analyze Resume Error:",
-      err
+      error
     );
 
     return res.status(500).json({
+      success: false,
       error:
-        err.message ||
-        "Resume analysis failed. Please try again.",
+        error.message ||
+        "Resume analysis failed.",
     });
   }
 };
